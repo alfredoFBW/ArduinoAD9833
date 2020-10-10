@@ -3,187 +3,187 @@
 #include <math.h> 
 #include <LiquidCrystal.h>
 
-//En arduino uno, nano.. Int = 16 Bits, Long = 32 Bits
-//FUNCIONA
 
-//Ajustes del SPI
-SPISettings ajusteSPI(10000000, MSBFIRST, SPI_MODE2);
-//Ajustes pantalla LCD
-LiquidCrystal LCD(5, 6, 7, 8, 9, A5);                   //(RS, EN, D4, D5, D6, D7) de la pantalla lcd
+//SPI Settings
+SPISettings SPIsettings(10000000, MSBFIRST, SPI_MODE2);
+//LCD 16x2 Settings
+LiquidCrystal LCD(5, 6, 7, 8, 9, A5);                   //(RS, EN, D4, D5, D6, D7) 
 
-//Variables NO CONSTANTES globales
-const long OSCEXT          = 25000000;                  //Frecuencia oscilador externo a 25MHz resolucion maxima = 0.1
-int        POS_ROTARY      = 0;                         //Contador del rotaryEncoder
-int        ACTUAL_CLK;                                  //Valor Actual CLK   (global por interrupt)
-int        ANTERIOR_CLK;                                //Valor anterior CLK
-long       CONT_ULT_PULS   = 0;                         //Tiempo ultima pulsacion SW
-long       CONT_ULT_PB     = 0;                         //Tiempo ultima pulsacion PB
-int        FREQ_ROTARY[8]  = {0, 0, 0, 0, 0, 0, 0, 0};  //Digitos de la frecuencia de rotary(el ultimo son 2 decimales)
-int        FASE_ROTARY[3]  = {0, 0, 0};                 //Digitos de la fase del rotary
-int        POS_DIGITO_FASE = 0;                         //Del 0 al 2, donde el 2 son las unidades
-int        POS_DIGITO_FREQ = 1;                         //Del 1 al 8, donde el 8 son las unidades
-int        MODO_OPERACION  = 0;                         //Modo 0 Seleccion de F, Modo 1 Seleccion de Fase, Modo 2 Onda, Modo 3 Stdby
-int        ONDA_DESEADA    = 0;                         //0 Seno, 1 Triang, 2 SQRMSB, 3 SQRMSB/2
-unsigned int ONDA_ESCRIBIR;                             //Onda que escribiremos en el AD        
+//Non Constant Global variables
+const long OSCEXT          = 25000000;                  //External Oscilator Frequency 25MHz
+int        POS_ROTARY      = 0;                         //Rotary Encoder Counter
+int        ACTUAL_CLK;                                  //Actual CLK value
+int        LAST_CLK;                                    //Last CLK value
+long       CONT_LAST_SW    = 0;                         //Variable to store the time since the SW button was pressed
+long       CONT_LAST_PB    = 0;                         //Variable to store the time since the Push Button was pressed
+int        FREQ_ROTARY[8]  = {0, 0, 0, 0, 0, 0, 0, 0};  //Frequency Digits
+int        PHASE_ROTARY[3] = {0, 0, 0};                 //Phase Digits
+int        POS_DIGIT_PHASE = 0;                         //From 0 to 2, where 2 are the units
+int        POS_DIGIT_FREQ = 1;                          //From 1 to 8 where 8 are the units
+int        OPERATION_MODE  = 0;                         //Mode 0: Frequency, Mode 1: Phase, Mode 2: Wave (Selection of those variables)
+int        DESIRED_WAVE    = 0;                         //0 Sine, 1 Triang, 2 SQRMSB, 3 SQRMSB/2
+unsigned int WAVE_TO_WRITE;                             //Wave that it is going to be written on the AD      
  
 //Pines
-const uint8_t FSYNC = 10; //Pin chipSelect
-const uint8_t CLK   =  2; //Pin CLK rotary Encoder Con intterrupción;
-const uint8_t DT    =  3; //Pin DT Rotary Encoder Con interrupción
-const uint8_t SW    =  4; //Pin SW Rotary Encoder para cambiar el digito de freq
-const uint8_t PB    = A0; //Pin del push button para seleccionar entre freq, fase u onda;
+const uint8_t FSYNC = 10; //ChipSelect Pin
+const uint8_t CLK   =  2; //CLK Rotary Pin;
+const uint8_t DT    =  3; //DT Rotary Pin
+const uint8_t SW    =  4; //SW Rotary Pin, to change between digits
+const uint8_t PB    = A0; //PB pin, to switch between operation modes
 
 //Formas de Onda
 const unsigned int SINE        = 0x2000;
 const unsigned int TRIANG      = 0x2002;
 const unsigned int SQUARE_MSB  = 0x2028;
-const unsigned int SQUARE_MSB2 = 0x2020;//Divide entre 2 la FREQ
+const unsigned int SQUARE_MSB2 = 0x2020;//Divide by 2 the FREQ
 
 
-//EScribimos en el registro del AD9837
-void escribirRegistro(const int &data);
+//Write AD9833's Registers
+void writeRegister(const int &data);
 
-//Escribimos la frecuencia, fase(pedida en grados) y onda deseada, hay que llamarla y se la llama en cambiarModoOperacionYEscribirDato
-void escribirAD9837(const float &freqDeseada, const unsigned int &faseDeseada, const unsigned int &onda);
+//Writes the frequency, phase(asked in degrees) and the desired wave. It has to be called using ChangeOperationModeAndWriteData
+void writeAD9837(const float &desiredFreq, const unsigned int &desiredPhase, const unsigned int &wave);
 
-//Transforma el array en frecuencia
-float freqSeleccionada();
+//Transforms the array into our frequency and returns it
+float selectedFreq();
 
-//Transforma el array de la fase en fase
-int faseSeleccionada();
+//Transforms the array into our phase and returns it
+int selectedPhase();
 
-//Cambiamos el modo de operacion y escribe el dato EN EL AD <---------
-void cambiarModoOperacionYEscribirDato();
+//Changes the operation mode and writes data into the AD9833 <-------------
+void changeOperationModeAndWriteData();
 
-//Cambiamos la posicion digito de la freq y de la fase
-void cambiarPosicionDigitoFreqYFase();
+//Changes the position of the frequency and phase
+void changeDigitFreqPhase();
 
-//Seleccionamos la onda
-void seleccionarOnda();
+//Obvious
+void selectWave();
 
-//Decodificamos el Encoder y ponemos la Frecuencia,Fase u onda dependiendo dle modo donde estemos;
-//REloj de 25MHz, reslucion de 0.1Hz
-void encoderCuadratura()
+//Prints everything in the lcd
+void lcdOperationMode();
+
+//Decodes the encoder and select the value of the different arrays (freq and phase);
+//25MHz clock => 0.1Hz Resolution
+void cuadratureEncoder()
 {
   ACTUAL_CLK = digitalRead(CLK);
 
-    if(ANTERIOR_CLK != ACTUAL_CLK && ACTUAL_CLK == 1)
+    if(LAST_CLK != ACTUAL_CLK && ACTUAL_CLK == 1)
     {
-      if(MODO_OPERACION == 0)   //FREQ
+      if(OPERATION_MODE == 0)   //FREQ
       {
-         //Sentido agujas del reloj, incrementamos
+         //Clockwise, increment
         if(ACTUAL_CLK == digitalRead(DT))
         {
-          //Si estamos en la de las décimas y no hemos llegado al MAX (0.9)
-          if(POS_DIGITO_FREQ == 1 && FREQ_ROTARY[7] < 9 && FREQ_ROTARY[0] < 8)
+          
+          if(POS_DIGIT_FREQ == 1 && FREQ_ROTARY[7] < 9 && FREQ_ROTARY[0] < 8) //Decimal(aaa.00)
             FREQ_ROTARY[7] += 1;
-          else if(POS_DIGITO_FREQ == 2 && FREQ_ROTARY[6] < 9 && FREQ_ROTARY[0] < 8)
+          else if(POS_DIGIT_FREQ == 2 && FREQ_ROTARY[6] < 9 && FREQ_ROTARY[0] < 8) //Units
             FREQ_ROTARY[6]++;
-          else if(POS_DIGITO_FREQ == 3 && FREQ_ROTARY[5] < 9 && FREQ_ROTARY[0] < 8)
+          else if(POS_DIGIT_FREQ == 3 && FREQ_ROTARY[5] < 9 && FREQ_ROTARY[0] < 8)
             FREQ_ROTARY[5]++;
-          else if(POS_DIGITO_FREQ == 4 && FREQ_ROTARY[4] < 9 && FREQ_ROTARY[0] < 8)
+          else if(POS_DIGIT_FREQ == 4 && FREQ_ROTARY[4] < 9 && FREQ_ROTARY[0] < 8)
             FREQ_ROTARY[4]++;
-          else if(POS_DIGITO_FREQ == 5 && FREQ_ROTARY[3] < 9 && FREQ_ROTARY[0] < 8)
+          else if(POS_DIGIT_FREQ == 5 && FREQ_ROTARY[3] < 9 && FREQ_ROTARY[0] < 8)
             FREQ_ROTARY[3]++;
-          else if(POS_DIGITO_FREQ == 6 && FREQ_ROTARY[2] < 9 && FREQ_ROTARY[0] < 8)
+          else if(POS_DIGIT_FREQ == 6 && FREQ_ROTARY[2] < 9 && FREQ_ROTARY[0] < 8)
             FREQ_ROTARY[2]++;
-          else if(POS_DIGITO_FREQ == 7 && FREQ_ROTARY[1] < 9 && FREQ_ROTARY[0] < 8)
+          else if(POS_DIGIT_FREQ == 7 && FREQ_ROTARY[1] < 9 && FREQ_ROTARY[0] < 8)
             FREQ_ROTARY[1]++;
-          else if(POS_DIGITO_FREQ == 8 && FREQ_ROTARY[0] < 8)
+          else if(POS_DIGIT_FREQ == 8 && FREQ_ROTARY[0] < 8)
           {
             FREQ_ROTARY[0]++;
-            if(FREQ_ROTARY[0] == 8)  //Hemos llegado al maximo de 8 Mhz
+            if(FREQ_ROTARY[0] == 8)  //8MHz MAximum reached
             {
               for(int i = 7; i > 0; i--)
-                FREQ_ROTARY[i] = 0.0;                         
+                FREQ_ROTARY[i] = 0;                         
             }
           }
         }
         else
         {
-          //Si estamos en la de las décimas y no hemos llegado al MIN
-          if(POS_DIGITO_FREQ == 1 && FREQ_ROTARY[7] > 0)
+     
+          if(POS_DIGIT_FREQ == 1 && FREQ_ROTARY[7] > 0)     //Decimal(aa.00)
             FREQ_ROTARY[7] -= 1;
-          else if(POS_DIGITO_FREQ == 2 && FREQ_ROTARY[6] > 0)
+          else if(POS_DIGIT_FREQ == 2 && FREQ_ROTARY[6] > 0)  //Units
             FREQ_ROTARY[6]--;
-          else if(POS_DIGITO_FREQ == 3 && FREQ_ROTARY[5] > 0)
+          else if(POS_DIGIT_FREQ == 3 && FREQ_ROTARY[5] > 0) 
             FREQ_ROTARY[5]--;
-          else if(POS_DIGITO_FREQ == 4 && FREQ_ROTARY[4] > 0)
+          else if(POS_DIGIT_FREQ == 4 && FREQ_ROTARY[4] > 0)
             FREQ_ROTARY[4]--;
-          else if(POS_DIGITO_FREQ == 5 && FREQ_ROTARY[3] > 0)
+          else if(POS_DIGIT_FREQ == 5 && FREQ_ROTARY[3] > 0)
             FREQ_ROTARY[3]--;
-          else if(POS_DIGITO_FREQ == 6 && FREQ_ROTARY[2] > 0)
+          else if(POS_DIGIT_FREQ == 6 && FREQ_ROTARY[2] > 0)
             FREQ_ROTARY[2]--;
-          else if(POS_DIGITO_FREQ == 7 && FREQ_ROTARY[1] > 0)
+          else if(POS_DIGIT_FREQ == 7 && FREQ_ROTARY[1] > 0)
             FREQ_ROTARY[1]--;
-          else if(POS_DIGITO_FREQ == 8 && FREQ_ROTARY[0] > 0)
+          else if(POS_DIGIT_FREQ == 8 && FREQ_ROTARY[0] > 0)
             FREQ_ROTARY[0]--;
         }       
       }
-      else if(MODO_OPERACION == 1) //FASE
+      else if(OPERATION_MODE == 1) //PHASE
       {
         if(ACTUAL_CLK == digitalRead(DT))
         {
-          if(POS_DIGITO_FASE == 0)
+          if(POS_DIGIT_PHASE == 0)
           {
-            if(FASE_ROTARY[2] < 9 && FASE_ROTARY[1] < 6 && FASE_ROTARY[0] <= 3)
-              FASE_ROTARY[2]++;
-            else if(FASE_ROTARY[1] >= 6 && FASE_ROTARY[0] == 3)
-              FASE_ROTARY[2] = 0;
+            if(PHASE_ROTARY[2] < 9 && PHASE_ROTARY[1] < 6 && PHASE_ROTARY[0] <= 3)
+              PHASE_ROTARY[2]++;
+            else if(PHASE_ROTARY[1] >= 6 && PHASE_ROTARY[0] == 3)
+              PHASE_ROTARY[2] = 0;
           }
-          else if(POS_DIGITO_FASE == 1)
+          else if(POS_DIGIT_PHASE == 1)
           {
-            if(FASE_ROTARY[1] < 9 && FASE_ROTARY[0] != 3)
-              FASE_ROTARY[1]++;
-            else if(FASE_ROTARY[0] == 3 && FASE_ROTARY[1] < 6)
-              FASE_ROTARY[1]++;
+            if(PHASE_ROTARY[1] < 9 && PHASE_ROTARY[0] != 3)
+              PHASE_ROTARY[1]++;
+            else if(PHASE_ROTARY[0] == 3 && PHASE_ROTARY[1] < 6)
+              PHASE_ROTARY[1]++;
           }
           else
           {
-            if(FASE_ROTARY[0] < 3)
-              FASE_ROTARY[0]++;
+            if(PHASE_ROTARY[0] < 3)
+              PHASE_ROTARY[0]++;
           }
             
         }
         else
         {
-          if(POS_DIGITO_FASE == 0)
+          if(POS_DIGIT_PHASE == 0)
           {
-            if(FASE_ROTARY[2] > 0)
-              FASE_ROTARY[2]--;    
+            if(PHASE_ROTARY[2] > 0)
+              PHASE_ROTARY[2]--;    
           }
-          else if(POS_DIGITO_FASE == 1)
+          else if(POS_DIGIT_PHASE == 1)
           {
-            if(FASE_ROTARY[1] > 0)
-              FASE_ROTARY[1]--;
+            if(PHASE_ROTARY[1] > 0)
+              PHASE_ROTARY[1]--;
           }
           else
           {
-            if(FASE_ROTARY[0] > 0)
-              FASE_ROTARY[0]--;
+            if(PHASE_ROTARY[0] > 0)
+              PHASE_ROTARY[0]--;
           }
         }
       }
-      else if(MODO_OPERACION == 2) //ONDA
+      else if(OPERATION_MODE == 2) //WAVE
       {
         if(ACTUAL_CLK == digitalRead(DT))
         {
-          if(ONDA_DESEADA < 3)
-            ONDA_DESEADA++;
+          if(DESIRED_WAVE < 3)
+            DESIRED_WAVE++;
         }
         else
         {
-          if(ONDA_DESEADA > 0)
-            ONDA_DESEADA--;
+          if(DESIRED_WAVE > 0)
+            DESIRED_WAVE--;
         }
       }
     }  
-    ANTERIOR_CLK = ACTUAL_CLK;
+    LAST_CLK = ACTUAL_CLK;
 }
 
 void setup() 
 {
-    Serial.begin(9600);
     SPI.begin();
     LCD.begin(16, 2);
     LCD.cursor();
@@ -197,44 +197,44 @@ void setup()
     pinMode(DT, INPUT);
     pinMode(SW, INPUT_PULLUP);
     pinMode(PB, INPUT);
-    digitalWrite(FSYNC, HIGH); //Lo inicializamos a 1
+    digitalWrite(FSYNC, HIGH); //Inizialitez to 1
 
-    ANTERIOR_CLK = digitalRead(CLK);
+    LAST_CLK = digitalRead(CLK);
     
-    attachInterrupt(digitalPinToInterrupt(CLK), encoderCuadratura, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(DT), encoderCuadratura, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(CLK), cuadratureEncoder, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(DT), cuadratureEncoder, CHANGE);
 
 }
 
 void loop() 
 {
   
-   cambiarPosicionDigitoFreqYFase(); 
-   seleccionarOnda();
-   pantallaModosOp();
-   cambiarModoOperacionYEscribirDato();
+   changeDigitFreqPhase(); 
+   selectWave();
+   lcdOperationMode();
+   changeOperationModeAndWriteData();
   
 }
 
-void seleccionarOnda()
+void selectWave()
 {
-  switch(ONDA_DESEADA)
+  switch(DESIRED_WAVE)
   {
-    case 0:ONDA_ESCRIBIR = SINE;      break;
-    case 1:ONDA_ESCRIBIR = TRIANG;    break;
-    case 2:ONDA_ESCRIBIR = SQUARE_MSB;break;
-    case 3:ONDA_ESCRIBIR = SQUARE_MSB2;break;
+    case 0:WAVE_TO_WRITE = SINE;      break;
+    case 1:WAVE_TO_WRITE = TRIANG;    break;
+    case 2:WAVE_TO_WRITE = SQUARE_MSB;break;
+    case 3:WAVE_TO_WRITE = SQUARE_MSB2;break;
   }
 }
 
-void pantallaModosOp()
+void lcdOperationMode()
 {
-  if(MODO_OPERACION == 0) //FREQ,
+  if(OPERATION_MODE == 0) //FREQ,
   {
     LCD.cursor();
     LCD.setCursor(12, 0);
-    LCD.print(" LDR");      //LOAD(CARGANDO DATOS)
-    switch(POS_DIGITO_FREQ)
+    LCD.print(" LDR");      //LOAD
+    switch(POS_DIGIT_FREQ)
     {
       case 1:
         LCD.setCursor(8,0);
@@ -291,13 +291,13 @@ void pantallaModosOp()
     }
     
   }
-  else if(MODO_OPERACION == 1) //FASE
+  else if(OPERATION_MODE == 1) //PHASE
   {
     LCD.cursor();
-    switch(POS_DIGITO_FASE)
+    switch(POS_DIGIT_PHASE)
     {
       case 0: 
-        if(FASE_ROTARY[0] == 3 && FASE_ROTARY[1] == 6)
+        if(PHASE_ROTARY[0] == 3 && PHASE_ROTARY[1] == 6)
         {
           LCD.setCursor(3, 1);
           LCD.print("360");
@@ -306,13 +306,13 @@ void pantallaModosOp()
         else
         {
           LCD.setCursor(5, 1);
-          LCD.print(FASE_ROTARY[2]);
+          LCD.print(PHASE_ROTARY[2]);
           LCD.setCursor(5, 1);          
         }
         break;
 
       case 1:
-        if(FASE_ROTARY[0] == 3 && FASE_ROTARY[1] >= 6)
+        if(PHASE_ROTARY[0] == 3 && PHASE_ROTARY[1] >= 6)
         {
           LCD.setCursor(3, 1);
           LCD.print("360");
@@ -321,13 +321,13 @@ void pantallaModosOp()
         else
         {
           LCD.setCursor(4, 1);
-          LCD.print(FASE_ROTARY[1]);
+          LCD.print(PHASE_ROTARY[1]);
           LCD.setCursor(4, 1);          
         }
         break;
 
       case 2:
-        if(FASE_ROTARY[0] == 3 && FASE_ROTARY[1] >= 6)
+        if(PHASE_ROTARY[0] == 3 && PHASE_ROTARY[1] >= 6)
         {
           LCD.setCursor(3, 1);
           LCD.print("360");
@@ -336,38 +336,17 @@ void pantallaModosOp()
         else
         {
         LCD.setCursor(3, 1);
-        LCD.print(FASE_ROTARY[0]);
+        LCD.print(PHASE_ROTARY[0]);
         LCD.setCursor(3, 1);
         }
         break;
     }
-/*    LCD.noCursor();
-    if(FASE_DESEADA < 10)
-    {
-      LCD.setCursor(5, 1);
-      LCD.print(FASE_DESEADA);
-      LCD.setCursor(5, 1);
-    }
-    else if(FASE_DESEADA < 100)
-    {
-      LCD.setCursor(4, 1);
-      LCD.print(FASE_DESEADA);
-      LCD.setCursor(5, 1); //Para que parezca que siempre esta en las unidades
-    }
-    else
-    {
-      LCD.setCursor(3, 1);
-      LCD.print(FASE_DESEADA);
-      LCD.setCursor(5, 1);
-    }
-    LCD.cursor();
-*/
   }
-  else if(MODO_OPERACION == 2) //ONDA
+  else if(OPERATION_MODE == 2) //WAVW
   {
     LCD.noCursor();
     LCD.setCursor(11, 1);
-    switch(ONDA_DESEADA)
+    switch(DESIRED_WAVE)
     {
       case 0:
         LCD.print("W:SIN");
@@ -395,101 +374,96 @@ void pantallaModosOp()
   delay(100);
 }
 
-void cambiarPosicionDigitoFreqYFase()
+void changeDigitFreqPhase()
 {
-   int botonActual = digitalRead(SW);
-  //Si se pulsa el botón del encoder aumentamos el digito de la freq
-  if(botonActual == 0)
+   int buttonActual = digitalRead(SW);
+  //If the encoder button is pressed
+  if(buttonActual == 0)
   {
-    //Si se ha mantenido mas de 200 ms
-    if( millis() - CONT_ULT_PULS > 200)
+    //If it was held for 200 mS
+    if( millis() - CONT_LAST_SW > 200)
     {
-      if(MODO_OPERACION == 0)  //Si estamos en frecuencia
+      if(OPERATION_MODE == 0)  //Frequency op mode
       {
-       if(POS_DIGITO_FREQ < 8)
-        POS_DIGITO_FREQ++;
+       if(POS_DIGIT_FREQ < 8)
+        POS_DIGIT_FREQ++;
        else
-        POS_DIGITO_FREQ = 1;
+        POS_DIGIT_FREQ = 1;
       }
-      else if(MODO_OPERACION == 1) //Si estamos en fase  
+      else if(OPERATION_MODE == 1) //Fase op mode 
       {
-        if(POS_DIGITO_FASE < 3)
-          POS_DIGITO_FASE++;
+        if(POS_DIGIT_PHASE < 3)
+          POS_DIGIT_PHASE++;
         else
-          POS_DIGITO_FASE = 0;
+          POS_DIGIT_PHASE = 0;
       }
     }
 
-    CONT_ULT_PULS = millis();
+    CONT_LAST_SW = millis();
   }
 }
 
-void cambiarModoOperacionYEscribirDato()
+void changeOperationModeAndWriteData()
 {
-   int botonActual = digitalRead(PB);
-  //Si se pulsa el botón(lo ponemos a masa) aumentamos el modo de operacion
-  if(botonActual == 0)
+   int buttonActual = digitalRead(PB);
+  //If the button is pressed we are changin the operation mode
+  if(buttonActual == 0)
   {
     //Si se ha mantenido mas de 200 ms
-    if( millis() - CONT_ULT_PB > 200)
+    if( millis() - CONT_LAST_PB > 200)
     {
-      if(MODO_OPERACION < 3)
+      if(OPERATION_MODE < 3)
       {
-        MODO_OPERACION++;
+        OPERATION_MODE++;
         
-        if(MODO_OPERACION == 3)
-          escribirAD9837(freqSeleccionada(), faseSeleccionada(), ONDA_ESCRIBIR); //ESCRIBIMOS AQUI PARA SOLO ESCRIBIR UNA VEZ DEL PASO DEL 2 AL 3
+        if(OPERATION_MODE == 3)
+          writeAD9837(selectedFreq(), selectedPhase(), WAVE_TO_WRITE); //WRITTEN HERE, BECAUSE SINCE WE ARE CHANGIN FROM 2 TO 3, THE AD IS WRITTEN ONLY ONCE, HENCE NOT AFFECTIN LOW FREQ
       }
       else
       {
-        MODO_OPERACION = 0;
+        OPERATION_MODE = 0;
       }
     }
-    CONT_ULT_PB = millis();
+    CONT_LAST_PB = millis();
   }
 }
 
-float freqSeleccionada()
+float selectedFreq()
 {
-  //Curiosamente con un for no sale igual de preciso
   return FREQ_ROTARY[0]*pow(10, 6) + FREQ_ROTARY[1]*pow(10, 5) + FREQ_ROTARY[2]*pow(10, 4) + 
   FREQ_ROTARY[3]*pow(10, 3) + FREQ_ROTARY[4]*pow(10, 2) + FREQ_ROTARY[5]*pow(10, 1) + FREQ_ROTARY[6] + FREQ_ROTARY[7]/10.00;
 }
 
-int faseSeleccionada()
+int selectedPhase()
 {
-  if(FASE_ROTARY[0] == 3 && FASE_ROTARY[1] >= 6)
+  if(PHASE_ROTARY[0] == 3 && PHASE_ROTARY[1] >= 6)
     return 360;
   else
-    return FASE_ROTARY[0]*pow(10, 2) + FASE_ROTARY[1]*pow(10,1) + FASE_ROTARY[2];
+    return PHASE_ROTARY[0]*pow(10, 2) + PHASE_ROTARY[1]*pow(10,1) + PHASE_ROTARY[2];
 }
 
-void escribirRegistro(const int &data)
+void writeRegister(const int &data)
 {
-  SPI.beginTransaction(ajusteSPI);
+  SPI.beginTransaction(SPIsettings);
   digitalWrite(FSYNC, LOW);
-  //delayMicroseconds(5); Minimo hay que esperar 5ns, cada instruccion con clock de 16Mhz es en cada 62.5 ns, no necesario
   SPI.transfer16(data);
   digitalWrite(FSYNC, HIGH);
   SPI.endTransaction();
 }
 
-void escribirAD9837(const float &freqDeseada, const unsigned int &faseDeseada, const unsigned int &onda)
+void writeAD9837(const float &desiredFreq, const unsigned int &desiredPhase, const unsigned int &wave)
 {
   
-  unsigned long int freqReg = (freqDeseada * pow(2,28))/(OSCEXT); //2^28
-  /*Desplazamos 14 msb bits, hacemos nand para dejar D15 = 0, D14 = 1 PARA
-  REG0 y OR con 0x4000 en caso de perderlos(D15, D14) (Freq Alta)*/
+  unsigned long int freqReg = (desiredFreq * pow(2,28))/(OSCEXT); //2^28
   int msbFreq = ((freqReg >> 14) & 0x7FFF) | 0x4000;
-  //Igual que MSB pero no hay que desplazar nada ya que cogemos los LSB directamente
   int lsbFreq = (freqReg & 0x7FFF) | 0x4000;
   
-  unsigned int faseReg = (((faseDeseada*PI)/180) * 4096)/(2*PI);
-  int bitsFase = (0xC000 | faseReg);
+  unsigned int faseReg = (((desiredPhase*PI)/180) * 4096)/(2*PI);
+  int bitsPhase = (0xC000 | faseReg);
 
-  escribirRegistro(0x2100);   //Preparacion para  poner registros a 0
-  escribirRegistro(lsbFreq);
-  escribirRegistro(msbFreq);
-  escribirRegistro(bitsFase); //Registro de fase (AN1017)
-  escribirRegistro(onda);     //ExitReset con forma de onda
+  writeRegister(0x2100);  
+  writeRegister(lsbFreq);
+  writeRegister(msbFreq);
+  writeRegister(bitsPhase); 
+  writeRegister(wave);     
 }
