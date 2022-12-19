@@ -24,14 +24,14 @@ int        OPERATION_MODE  = 0;                         //Mode 0: Frequency, Mod
 int        DESIRED_WAVE    = 0;                         //0 Sine, 1 Triang, 2 SQRMSB, 3 SQRMSB/2
 unsigned int WAVE_TO_WRITE;                             //Wave that it is going to be written on the AD      
  
-//Pines
+//Pins
 const uint8_t FSYNC = 10; //ChipSelect Pin
 const uint8_t CLK   =  2; //CLK Rotary Pin;
 const uint8_t DT    =  3; //DT Rotary Pin
 const uint8_t SW    =  4; //SW Rotary Pin, to change between digits
 const uint8_t PB    = A0; //PB pin, to switch between operation modes
 
-//Formas de Onda
+//Waveforms
 const unsigned int SINE        = 0x2000;
 const unsigned int TRIANG      = 0x2002;
 const unsigned int SQUARE_MSB  = 0x2028;
@@ -342,7 +342,7 @@ void lcdOperationMode()
         break;
     }
   }
-  else if(OPERATION_MODE == 2) //WAVW
+  else if(OPERATION_MODE == 2) //WAVE
   {
     LCD.noCursor();
     LCD.setCursor(11, 1);
@@ -390,7 +390,7 @@ void changeDigitFreqPhase()
        else
         POS_DIGIT_FREQ = 1;
       }
-      else if(OPERATION_MODE == 1) //Fase op mode 
+      else if(OPERATION_MODE == 1) //Phase op mode 
       {
         if(POS_DIGIT_PHASE < 3)
           POS_DIGIT_PHASE++;
@@ -406,7 +406,7 @@ void changeDigitFreqPhase()
 void changeOperationModeAndWriteData()
 {
    int buttonActual = digitalRead(PB);
-  //If the button is pressed we are changin the operation mode
+  //If the button is pressed we are changing the operation mode
   if(buttonActual == 0)
   {
     //Si se ha mantenido mas de 200 ms
@@ -417,7 +417,7 @@ void changeOperationModeAndWriteData()
         OPERATION_MODE++;
         
         if(OPERATION_MODE == 3)
-          writeAD9837(selectedFreq(), selectedPhase(), WAVE_TO_WRITE); //WRITTEN HERE, BECAUSE SINCE WE ARE CHANGIN FROM 2 TO 3, THE AD IS WRITTEN ONLY ONCE, HENCE NOT AFFECTIN LOW FREQ
+          writeAD9837(selectedFreq(), selectedPhase(), WAVE_TO_WRITE); //WRITTEN HERE, BECAUSE SINCE WE ARE CHANGING FROM 2 TO 3, THE AD IS WRITTEN ONLY ONCE, HENCE NOT AFFECTIN LOW FREQ
       }
       else
       {
